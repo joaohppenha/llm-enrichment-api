@@ -1,0 +1,50 @@
+[
+  {
+    "id": 1,
+    "text": "I was double charged on my invoice for this month and need an urgent refund.",
+    "expected_category": "billing",
+    "expected_urgency": "high"
+  },
+  {
+    "id": 2,
+    "text": "Clicking the export CSV button throws a blank white screen and crashes the session.",
+    "expected_category": "bug",
+    "expected_urgency": "normal"
+  },
+  {
+    "id": 3,
+    "text": "It would be great if we could customize the color palette of our executive dashboard.",
+    "expected_category": "feature",
+    "expected_urgency": "low"
+  },
+  {
+    "id": 4,
+    "text": "We received an extrajudicial legal notice regarding copyright breach with a 15-day deadline.",
+    "expected_category": "legal",
+    "expected_urgency": "high"
+  },
+  {
+    "id": 5,
+    "text": "Hello, hope you have a nice weekend ahead!",
+    "expected_category": "other",
+    "expected_urgency": "low"
+  },
+  {
+    "id": 6,
+    "text": "The payment gateway is rejecting valid credit cards with an unknown error code.",
+    "expected_category": "billing",
+    "expected_urgency": "high"
+  },
+  {
+    "id": 7,
+    "text": "Can you add dark mode support to the mobile view?",
+    "expected_category": "feature",
+    "expected_urgency": "low"
+  },
+  {
+    "id": 8,
+    "text": "asdfjkl; 123456 !!!",
+    "expected_category": "other",
+    "expected_urgency": "low"
+  }
+]

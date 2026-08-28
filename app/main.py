@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, status
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import OpenAI, AuthenticationError, APIError
 from pydantic import ValidationError
 
 from app.schemas.llm import NoticeInput, EnrichmentOutput, CategoryEnum, UrgencyEnum
@@ -49,7 +49,6 @@ def log_quarantine(raw_input: str, raw_output: str, error_msg: str):
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 def log_cost(prompt_version: str, model: str, prompt_tokens: int, completion_tokens: int, duration_ms: float, repairs: int):
-    """Structured cost log printed to stdout."""
     log_entry = {
         "event": "llm_call_stats",
         "prompt_version": prompt_version,
@@ -68,7 +67,7 @@ def log_cost(prompt_version: str, model: str, prompt_tokens: int, completion_tok
     status_code=status.HTTP_200_OK
 )
 async def enrich_legal_notice(payload: NoticeInput):
-    # 1. Kill Switch Check (Returns safe fallback without calling LLM)
+    # 1. Kill Switch: MUST BE FIRST to avoid any external calls or key checks
     if os.getenv("LLM_ENABLED", "true").lower() == "false":
         return EnrichmentOutput(
             category=CategoryEnum.OTHER,
@@ -90,10 +89,20 @@ async def enrich_legal_notice(payload: NoticeInput):
 
     system_prompt = load_prompt()
     
-    # 3. Explicit 30s Timeout and Max Retries setup
+    # Check credentials explicitly
+    api_key = os.getenv("LLM_API_KEY", "")
+    base_url = os.getenv("LLM_BASE_URL", "[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)")
+    model_name = os.getenv("LLM_MODEL", "openrouter/free")
+
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="LLM_API_KEY is missing in environment variables."
+        )
+
     client = OpenAI(
-        base_url=os.environ["LLM_BASE_URL"],
-        api_key=os.environ["LLM_API_KEY"],
+        base_url=base_url,
+        api_key=api_key,
         timeout=30.0,
         max_retries=2
     )
@@ -109,10 +118,10 @@ async def enrich_legal_notice(payload: NoticeInput):
     completion_tokens = 0
     raw_output = ""
 
-    # Attempt 1: Initial model execution
+    # Attempt 1: Call LLM
     try:
         res = client.chat.completions.create(
-            model=os.environ["LLM_MODEL"],
+            model=model_name,
             temperature=0.1,
             messages=messages
         )
@@ -126,13 +135,23 @@ async def enrich_legal_notice(payload: NoticeInput):
         validated_output = EnrichmentOutput.model_validate(parsed_json)
 
         duration_ms = (time.time() - start_time) * 1000
-        log_cost("enrich-v1.md", os.environ["LLM_MODEL"], prompt_tokens, completion_tokens, duration_ms, repairs_count)
+        log_cost("enrich-v1.md", model_name, prompt_tokens, completion_tokens, duration_ms, repairs_count)
         return validated_output
 
+    except AuthenticationError as auth_err:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed with LLM Provider: {str(auth_err)}"
+        )
+    except APIError as api_err:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LLM Provider API Error: {str(api_err)}"
+        )
     except (json.JSONDecodeError, ValidationError) as first_err:
         first_error_detail = str(first_err)
 
-    # Attempt 2: Repair retry (1 single repair attempt)
+    # Attempt 2: Repair retry
     repairs_count = 1
     repair_prompt = (
         f"Your previous response was rejected due to this schema validation error:\n"
@@ -146,7 +165,7 @@ async def enrich_legal_notice(payload: NoticeInput):
 
     try:
         repair_res = client.chat.completions.create(
-            model=os.environ["LLM_MODEL"],
+            model=model_name,
             temperature=0.0,
             messages=messages
         )
@@ -160,7 +179,7 @@ async def enrich_legal_notice(payload: NoticeInput):
         validated_output = EnrichmentOutput.model_validate(repaired_json)
 
         duration_ms = (time.time() - start_time) * 1000
-        log_cost("enrich-v1.md", os.environ["LLM_MODEL"], prompt_tokens, completion_tokens, duration_ms, repairs_count)
+        log_cost("enrich-v1.md", model_name, prompt_tokens, completion_tokens, duration_ms, repairs_count)
         return validated_output
 
     except Exception as second_err:
