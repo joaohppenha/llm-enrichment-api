@@ -1,6 +1,5 @@
 # LLM enrichment API
 
-# Development Log — Week 7 Assignment A17 (FlyRank)
 
 ## 📌 Project Overview
 - **Project Name:** `llm-enrichment-api`
