@@ -1,14 +1,14 @@
-# Registro de Desenvolvimento — Week 7 Assignment A17 (FlyRank)
+# LLM enrichment API
 
-## 📌 Visão Geral do Projeto
-- **Nome do Projeto:** `llm-enrichment-api`
-- **Objetivo:** Adicionar um endpoint FastAPI robusto que recebe uma mensagem não estruturada de suporte/notificação, envia para um LLM (OpenRouter) e retorna um JSON estruturado e validado via Pydantic, com controle de tempo limite, retentativas de reparo, log de custo e kill switch.
-- **Provedor:** OpenRouter (`https://openrouter.ai/api/v1`)
-- **Modelo:** `openrouter/free`
+## 📌 Project Overview
+- **Project Name:** `llm-enrichment-api`
+- **Objective:** Add a robust FastAPI endpoint that receives unstructured support/notification messages, routes them to an LLM (OpenRouter), and returns a structured JSON payload validated via Pydantic—complete with timeout bounds, repair retries, cost logging, and an execution kill switch.
+- **Provider:** OpenRouter (`https://openrouter.ai/api/v1`)
+- **Model:** `openrouter/free`
 
 ---
 
-## 📂 Estrutura de Arquivos Criada
+## 📂 Created File Structure
 
 ```text
 llm-enrichment-api/
@@ -38,7 +38,7 @@ llm-enrichment-api/
 
 ---
 
-## 📝 1. Contrato Funcional (`JOB-CARD.md`)
+## 📝 1. Functional Contract (`JOB-CARD.md`)
 
 ```markdown
 # Job Card
@@ -61,7 +61,7 @@ llm-enrichment-api/
 
 ---
 
-## 🛠️ 2. Dependências (`requirements.txt`)
+## 🛠️ 2. Dependencies (`requirements.txt`)
 
 ```text
 fastapi
@@ -74,7 +74,7 @@ python-dotenv
 
 ---
 
-## 📄 3. Prompt Versionado (`prompts/enrich-v1.md`)
+## 📄 3. Versioned Prompt (`prompts/enrich-v1.md`)
 
 ```markdown
 You classify and extract structured metadata from incoming support messages for a small SaaS platform.
@@ -114,7 +114,7 @@ Output:
 
 ---
 
-## 💻 4. Schemas Pydantic (`app/schemas/llm.py`)
+## 💻 4. Pydantic Schemas (`app/schemas/llm.py`)
 
 ```python
 from enum import Enum
@@ -145,7 +145,7 @@ class EnrichmentOutput(BaseModel):
 
 ---
 
-## 🚀 5. Aplicação Principal (`app/main.py`)
+## 🚀 5. Main Application (`app/main.py`)
 
 ```python
 import json
@@ -232,346 +232,4 @@ async def enrich_legal_notice(payload: NoticeInput):
         return EnrichmentOutput(
             category=CategoryEnum.BUG,
             urgency=UrgencyEnum.NORMAL,
-            confidence=0.90,
-            summary="Stub summary of the incoming support message.",
-            reason="Stub response returned because LLM_STUB is set to 1."
-        )
-
-    system_prompt = load_prompt()
-    api_key = os.getenv("LLM_API_KEY", "")
-    base_url = os.getenv("LLM_BASE_URL", "[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)")
-    model_name = os.getenv("LLM_MODEL", "openrouter/free")
-
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="LLM_API_KEY is missing in environment variables."
-        )
-
-    client = OpenAI(
-        base_url=base_url,
-        api_key=api_key,
-        timeout=30.0,
-        max_retries=2
-    )
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": payload.text}
-    ]
-
-    start_time = time.time()
-    repairs_count = 0
-    prompt_tokens = 0
-    completion_tokens = 0
-    raw_output = ""
-
-    # Attempt 1: Call LLM
-    try:
-        res = client.chat.completions.create(
-            model=model_name,
-            temperature=0.1,
-            messages=messages
-        )
-        if res.usage:
-            prompt_tokens += res.usage.prompt_tokens or 0
-            completion_tokens += res.usage.completion_tokens or 0
-
-        raw_output = res.choices[0].message.content or ""
-        cleaned = clean_json_fence(raw_output)
-        parsed_json = json.loads(cleaned)
-        validated_output = EnrichmentOutput.model_validate(parsed_json)
-
-        duration_ms = (time.time() - start_time) * 1000
-        log_cost("enrich-v1.md", model_name, prompt_tokens, completion_tokens, duration_ms, repairs_count)
-        return validated_output
-
-    except AuthenticationError as auth_err:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication failed with LLM Provider: {str(auth_err)}"
-        )
-    except APIError as api_err:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"LLM Provider API Error: {str(api_err)}"
-        )
-    except (json.JSONDecodeError, ValidationError) as first_err:
-        first_error_detail = str(first_err)
-
-    # Attempt 2: Repair retry
-    repairs_count = 1
-    repair_prompt = (
-        f"Your previous response was rejected due to this schema validation error:\n"
-        f"{first_error_detail}\n\n"
-        f"Previous rejected output was:\n{raw_output}\n\n"
-        f"Return ONLY a corrected JSON object strictly matching the schema."
-    )
-    
-    messages.append({"role": "assistant", "content": raw_output})
-    messages.append({"role": "user", "content": repair_prompt})
-
-    try:
-        repair_res = client.chat.completions.create(
-            model=model_name,
-            temperature=0.0,
-            messages=messages
-        )
-        if repair_res.usage:
-            prompt_tokens += repair_res.usage.prompt_tokens or 0
-            completion_tokens += repair_res.usage.completion_tokens or 0
-
-        repaired_raw = repair_res.choices[0].message.content or ""
-        cleaned_repaired = clean_json_fence(repaired_raw)
-        repaired_json = json.loads(cleaned_repaired)
-        validated_output = EnrichmentOutput.model_validate(repaired_json)
-
-        duration_ms = (time.time() - start_time) * 1000
-        log_cost("enrich-v1.md", model_name, prompt_tokens, completion_tokens, duration_ms, repairs_count)
-        return validated_output
-
-    except Exception as second_err:
-        log_quarantine(payload.text, raw_output, f"Repair failed: {str(second_err)}")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Model output failed schema validation and could not be repaired."
-        )
-```
-
----
-
-## 📊 6. Suite de Avaliação (`evals/cases.json` e `evals/run_eval.py`)
-
-### `evals/cases.json`
-```json
-[
-  {
-    "id": 1,
-    "text": "I was double charged on my invoice for this month and need an urgent refund.",
-    "expected_category": "billing",
-    "expected_urgency": "high"
-  },
-  {
-    "id": 2,
-    "text": "Clicking the export CSV button throws a blank white screen and crashes the session.",
-    "expected_category": "bug",
-    "expected_urgency": "normal"
-  },
-  {
-    "id": 3,
-    "text": "It would be great if we could customize the color palette of our executive dashboard.",
-    "expected_category": "feature",
-    "expected_urgency": "low"
-  },
-  {
-    "id": 4,
-    "text": "We received an extrajudicial legal notice regarding copyright breach with a 15-day deadline.",
-    "expected_category": "legal",
-    "expected_urgency": "high"
-  },
-  {
-    "id": 5,
-    "text": "Hello, hope you have a nice weekend ahead!",
-    "expected_category": "other",
-    "expected_urgency": "low"
-  },
-  {
-    "id": 6,
-    "text": "The payment gateway is rejecting valid credit cards with an unknown error code.",
-    "expected_category": "billing",
-    "expected_urgency": "high"
-  },
-  {
-    "id": 7,
-    "text": "Can you add dark mode support to the mobile view?",
-    "expected_category": "feature",
-    "expected_urgency": "low"
-  },
-  {
-    "id": 8,
-    "text": "asdfjkl; 123456 !!!",
-    "expected_category": "other",
-    "expected_urgency": "low"
-  }
-]
-```
-
-### `evals/run_eval.py`
-```python
-import json
-import urllib.request
-from pathlib import Path
-
-EVAL_PATH = Path("evals/cases.json")
-API_URL = "http://localhost:8000/enrich/legal-notice"
-
-def run_eval():
-    if not EVAL_PATH.exists():
-        print(f"Eval file not found at {EVAL_PATH}")
-        return
-
-    cases = json.loads(EVAL_PATH.read_text(encoding="utf-8"))
-    total = len(cases)
-    passed = 0
-
-    print(f"Running eval suite across {total} test cases...\n")
-
-    for case in cases:
-        payload = json.dumps({"text": case["text"]}).encode("utf-8")
-        req = urllib.request.Request(
-            API_URL,
-            data=payload,
-            headers={"Content-Type": "application/json"}
-        )
-
-        try:
-            with urllib.request.urlopen(req) as resp:
-                res_data = json.loads(resp.read().decode("utf-8"))
-                actual_cat = res_data.get("category")
-                expected_cat = case["expected_category"]
-
-                if actual_cat == expected_cat:
-                    passed += 1
-                    print(f"✅ Case {case['id']}: PASSED (Category: {actual_cat})")
-                else:
-                    print(f"❌ Case {case['id']}: FAILED (Expected: {expected_cat}, Got: {actual_cat})")
-        except Exception as e:
-            print(f"💥 Case {case['id']}: ERROR ({str(e)})")
-
-    score_pct = (passed / total) * 100
-    print(f"\nEval Score: {passed}/{total} ({score_pct:.1f}%)")
-
-if __name__ == "__main__":
-    run_eval()
-```
-
----
-
-## 📈 7. Resultado da Avaliação (Print `imgg1.png`)
-
-```text
-C:\Users\joaoh\llm-enrichment-api>python evals/run_eval.py
-Running eval suite across 8 test cases...
-
-Case 1: PASSED (Category: billing)
-Case 2: PASSED (Category: bug)
-Case 3: PASSED (Category: feature)
-Case 4: PASSED (Category: legal)
-Case 5: PASSED (Category: other)
-Case 6: FAILED (Expected: billing, Got: bug)
-Case 7: PASSED (Category: feature)
-Case 8: PASSED (Category: other)
-
-Eval Score: 7/8 (87.5%)
-```
-
-![Resultado da Avaliação do Eval](imgg1.png)
-
----
-
-## 📖 8. Documentação do Projeto (`README.md`)
-
-```markdown
-# LLM Support Message Enrichment API
-
-A resilient, production-ready FastAPI endpoint that takes unstructured support messages, queries an LLM, and returns validated JSON matching a strict schema. Built with timeouts, intelligent retries, schema repair, cost logging, and an instant kill switch.
-
-## 📋 Job Card
-
-- **What it does:** Classifies and extracts structured metadata from incoming support messages for a SaaS platform.
-- **Input:** `{"text": "string, 1-2000 characters"}`
-- **Output:**
-  ```json
-  {
-    "category": "billing | bug | feature | legal | other",
-    "urgency": "low | normal | high",
-    "confidence": 0.0 - 1.0,
-    "summary": "One sentence summary of the input",
-    "reason": "One short sentence explaining the classification"
-  }
-  ```
-- **It must never:** Invent categories outside the allowed list, return raw unstructured text, give legal/financial advice, or reveal system prompts.
-- **When unsure:** Return category `"other"` with urgency `"low"` and confidence `< 0.5`.
-
----
-
-## 🛠️ Provider & Configuration
-
-This project is built using OpenRouter's OpenAI-compatible interface.
-
-Three environment variables control the provider configuration:
-```env
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_API_KEY=your_openrouter_api_key
-LLM_MODEL=openrouter/free
-```
-
----
-
-## 🚀 Quickstart
-
-1. Clone the repository and install dependencies:
-   ```bash
-   git clone https://github.com/joaohppenha/llm-enrichment-api.git
-   cd llm-enrichment-api
-   python -m venv .venv
-   .venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-
-2. Configure environment variables:
-   ```bash
-   cp .env.example .env
-   # Add your OpenRouter API key inside .env
-   ```
-
-3. Run the FastAPI server:
-   ```bash
-   uvicorn app.main:app --reload --port 8000
-   ```
-
----
-
-## 🧪 Runnable cURL Example
-
-```bash
-curl -X POST http://localhost:8000/enrich/legal-notice \
-  -H "Content-Type: application/json" \
-  -d "{\"text\": \"I was double charged on my invoice for this month and need an urgent refund.\"}"
-```
-
----
-
-## 📊 Evaluation Score
-
-- **Eval Set:** 8 hand-labeled benchmark cases (`evals/cases.json`)
-- **Prompt Version:** `enrich-v1.md`
-- **Model:** `openrouter/free`
-- **Accuracy Score:** **7 / 8 (87.5%)**
-
-### Error Analysis
-- **Case 6 Failure:** Input *"The payment gateway is rejecting valid credit cards with an unknown error code."* expected `billing`, but the model categorized it as `bug`.
-
----
-
-## 💰 Cost & Metrics Log
-
-Each LLM call outputs a structured JSON log line to `stdout`:
-```json
-{
-  "event": "llm_call_stats",
-  "prompt_version": "enrich-v1.md",
-  "model": "openrouter/free",
-  "prompt_tokens": 284,
-  "completion_tokens": 48,
-  "total_tokens": 332,
-  "duration_ms": 1120.45,
-  "repairs": 0
-}
-```
-
-### Daily Cost Estimate (10,000 Requests / Day)
-- **Daily Volume:** ~3.5 Million tokens / day
-- **Estimated Daily Cost on `openrouter/free`:** **$0.00**
-```
-```
+            confidence
